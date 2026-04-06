@@ -1,13 +1,10 @@
 package drift
 
-// Env reads an environment variable from the WASM runner host.
-// These are the user's secrets injected via the Kubernetes envSecretName.
+import "os"
+
+// Env reads an environment variable. In deployed mode, the runner injects
+// the user's secrets as environment variables on the subprocess.
 // Returns an empty string if the variable is not set.
 func Env(key string) string {
-	keyPtr, keyLen := stringToPtr(key)
-	respLen := hostEnvGet(keyPtr, keyLen)
-	if respLen == 0 {
-		return ""
-	}
-	return string(readHostResponse(respLen))
+	return os.Getenv(key)
 }

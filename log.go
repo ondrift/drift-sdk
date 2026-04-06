@@ -1,23 +1,22 @@
 package drift
 
-// Log sends a log message at "info" level to the WASM runner's log shipper,
-// which batches and forwards it to the atomic proxy.
+import (
+	"fmt"
+	"os"
+)
+
+// Log sends a log message at "info" level. The runner captures stderr
+// and stores per-function logs.
 func Log(msg string) {
-	levelPtr, levelLen := stringToPtr("info")
-	msgPtr, msgLen := stringToPtr(msg)
-	hostLogWrite(levelPtr, levelLen, msgPtr, msgLen)
+	fmt.Fprintf(os.Stderr, "[info] %s\n", msg)
 }
 
 // LogError sends a log message at "error" level.
 func LogError(msg string) {
-	levelPtr, levelLen := stringToPtr("error")
-	msgPtr, msgLen := stringToPtr(msg)
-	hostLogWrite(levelPtr, levelLen, msgPtr, msgLen)
+	fmt.Fprintf(os.Stderr, "[error] %s\n", msg)
 }
 
 // LogWarn sends a log message at "warn" level.
 func LogWarn(msg string) {
-	levelPtr, levelLen := stringToPtr("warn")
-	msgPtr, msgLen := stringToPtr(msg)
-	hostLogWrite(levelPtr, levelLen, msgPtr, msgLen)
+	fmt.Fprintf(os.Stderr, "[warn] %s\n", msg)
 }

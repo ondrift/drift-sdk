@@ -1,23 +1,18 @@
-//go:build !wasip1
-
 package drift
 
 import (
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"sync"
-	"unsafe"
 )
 
 // localBackbone is an in-memory implementation of backbone services for local
 // development with `drift atomic run`. All state lives in memory and is lost
 // when the process exits.
 var localBackbone = &memBackbone{
-	nosql:  make(map[string]map[string]json.RawMessage), // collection -> key -> doc
+	nosql:  make(map[string]map[string]json.RawMessage),
 	cache:  make(map[string]json.RawMessage),
 	queues: make(map[string][]json.RawMessage),
 	blobs:  make(map[string][]byte),
@@ -41,7 +36,6 @@ func (m *memBackbone) handle(req backboneRequest) []byte {
 	path := req.Path
 	method := strings.ToUpper(req.Method)
 
-	// Parse query parameters from path.
 	var query url.Values
 	if i := strings.IndexByte(path, '?'); i >= 0 {
 		query, _ = url.ParseQuery(path[i+1:])
@@ -87,9 +81,8 @@ func (m *memBackbone) handle(req backboneRequest) []byte {
 		}
 		docs, ok := m.nosql[col]
 		if !ok {
-			return jsonMarshal([]any{})
+			return marshalJSON([]any{})
 		}
-		// Collect optional field filter.
 		filterField := query.Get("field")
 		filterValue := query.Get("value")
 		var results []json.RawMessage
@@ -107,7 +100,7 @@ func (m *memBackbone) handle(req backboneRequest) []byte {
 		if results == nil {
 			results = []json.RawMessage{}
 		}
-		return jsonMarshal(results)
+		return marshalJSON(results)
 
 	case strings.HasPrefix(path, "nosql/drop") && method == "POST":
 		col := query.Get("collection")
@@ -174,10 +167,7 @@ func (m *memBackbone) handle(req backboneRequest) []byte {
 
 	// --- Secret ---
 	case path == "secret/get" && method == "GET":
-		name := query.Get("name")
-		// In local dev, secrets are available as environment variables.
-		val := os.Getenv(name)
-		return []byte(val)
+		return nil
 
 	// --- Lock ---
 	case path == "lock/acquire" && method == "POST":
@@ -190,7 +180,7 @@ func (m *memBackbone) handle(req backboneRequest) []byte {
 		m.nextID++
 		token := fmt.Sprintf("local-lock-%d", m.nextID)
 		m.locks[name] = token
-		return jsonMarshal(map[string]string{"token": token})
+		return marshalJSON(map[string]string{"token": token})
 
 	case path == "lock/release" && method == "POST":
 		var body map[string]any
@@ -199,125 +189,18 @@ func (m *memBackbone) handle(req backboneRequest) []byte {
 		delete(m.locks, name)
 		return nil
 
-	// --- Vector (basic in-memory stub) ---
+	// --- Vector ---
 	case path == "vector/insert" && method == "POST":
 		return nil
 
 	case path == "vector/search" && method == "POST":
-		return jsonMarshal([]any{})
+		return marshalJSON([]any{})
 	}
 
 	return nil
 }
 
-func jsonMarshal(v any) []byte {
+func marshalJSON(v any) []byte {
 	b, _ := json.Marshal(v)
 	return b
-}
-
-// hostBackboneRequest implements backbone calls against the in-memory store.
-func hostBackboneRequest(reqPtr, reqLen uint32) uint32 {
-	reqBytes := unsafe.Slice((*byte)(unsafe.Pointer(uintptr(reqPtr))), int(reqLen))
-
-	var req backboneRequest
-	if err := json.Unmarshal(reqBytes, &req); err != nil {
-		return 0
-	}
-
-	resp := localBackbone.handle(req)
-	if len(resp) == 0 {
-		return 0
-	}
-
-	lastAlloc = make([]byte, len(resp))
-	copy(lastAlloc, resp)
-	return uint32(len(resp))
-}
-
-// hostHTTPRequest makes real outbound HTTP requests in local dev mode.
-func hostHTTPRequest(reqPtr, reqLen uint32) uint32 {
-	reqBytes := unsafe.Slice((*byte)(unsafe.Pointer(uintptr(reqPtr))), int(reqLen))
-
-	var req httpRequest
-	if err := json.Unmarshal(reqBytes, &req); err != nil {
-		return 0
-	}
-
-	var bodyReader *strings.Reader
-	if req.Body != nil {
-		bodyReader = strings.NewReader(string(req.Body))
-	} else {
-		bodyReader = strings.NewReader("")
-	}
-
-	httpReq, err := http.NewRequest(req.Method, req.URL, bodyReader)
-	if err != nil {
-		return 0
-	}
-	for k, v := range req.Headers {
-		httpReq.Header.Set(k, v)
-	}
-
-	resp, err := http.DefaultClient.Do(httpReq)
-	if err != nil {
-		return 0
-	}
-	defer resp.Body.Close()
-
-	var buf strings.Builder
-	buf.Grow(4096)
-	fmt.Fprintf(&buf, `{"status":%d,"headers":{`, resp.StatusCode)
-	first := true
-	for k := range resp.Header {
-		if !first {
-			buf.WriteByte(',')
-		}
-		first = false
-		hk, _ := json.Marshal(k)
-		hv, _ := json.Marshal(resp.Header.Get(k))
-		buf.Write(hk)
-		buf.WriteByte(':')
-		buf.Write(hv)
-	}
-	buf.WriteString(`},"body":`)
-	bodyBytes := make([]byte, 0, 4096)
-	bodyBytes, _ = appendReadAll(bodyBytes, resp.Body)
-	// Body is already bytes — write as JSON string.
-	bodyJSON, _ := json.Marshal(json.RawMessage(bodyBytes))
-	buf.Write(bodyJSON)
-	buf.WriteByte('}')
-
-	result := []byte(buf.String())
-	lastAlloc = make([]byte, len(result))
-	copy(lastAlloc, result)
-	return uint32(len(result))
-}
-
-func appendReadAll(buf []byte, r interface{ Read([]byte) (int, error) }) ([]byte, error) {
-	tmp := make([]byte, 4096)
-	for {
-		n, err := r.Read(tmp)
-		buf = append(buf, tmp[:n]...)
-		if err != nil {
-			return buf, nil
-		}
-	}
-}
-
-// hostLogWrite prints log messages to stderr in local dev mode.
-func hostLogWrite(levelPtr, levelLen, msgPtr, msgLen uint32) {
-	level := unsafe.String((*byte)(unsafe.Pointer(uintptr(levelPtr))), int(levelLen))
-	msg := unsafe.String((*byte)(unsafe.Pointer(uintptr(msgPtr))), int(msgLen))
-	fmt.Fprintf(os.Stderr, "[%s] %s\n", level, msg)
-}
-
-// hostEnvGet reads environment variables in local dev mode.
-func hostEnvGet(keyPtr, keyLen uint32) uint32 {
-	key := unsafe.String((*byte)(unsafe.Pointer(uintptr(keyPtr))), int(keyLen))
-	val := os.Getenv(key)
-	if val == "" {
-		return 0
-	}
-	lastAlloc = []byte(val)
-	return uint32(len(lastAlloc))
 }

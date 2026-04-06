@@ -1,14 +1,63 @@
 package drift
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"maps"
+	"net/http"
+	"os"
 )
 
-// callBackbone is the low-level backbone request helper. It serializes the
-// request, calls the host function, and returns the raw response bytes.
+// callBackbone routes backbone requests to the real service (when deployed)
+// or the in-memory store (local dev).
 func callBackbone(method, path string, body any) ([]byte, error) {
+	if url := os.Getenv("BACKBONE_URL"); url != "" {
+		return callBackboneHTTP(url, method, path, body)
+	}
+	return callBackboneLocal(method, path, body)
+}
+
+// callBackboneHTTP calls the real backbone service via HTTP.
+func callBackboneHTTP(baseURL, method, path string, body any) ([]byte, error) {
+	url := baseURL + "/" + path
+
+	var bodyReader io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return nil, fmt.Errorf("drift: marshal backbone body: %w", err)
+		}
+		bodyReader = bytes.NewReader(b)
+	}
+
+	req, err := http.NewRequest(method, url, bodyReader)
+	if err != nil {
+		return nil, fmt.Errorf("drift: backbone request: %w", err)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("drift: backbone call: %w", err)
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("drift: read backbone response: %w", err)
+	}
+	if resp.StatusCode == http.StatusNoContent || len(data) == 0 {
+		return nil, nil
+	}
+	return data, nil
+}
+
+// callBackboneLocal uses the in-memory store for local dev.
+func callBackboneLocal(method, path string, body any) ([]byte, error) {
 	var bodyJSON json.RawMessage
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -18,21 +67,15 @@ func callBackbone(method, path string, body any) ([]byte, error) {
 		bodyJSON = b
 	}
 
-	reqBytes, err := json.Marshal(backboneRequest{
+	resp := localBackbone.handle(backboneRequest{
 		Method: method,
 		Path:   path,
 		Body:   bodyJSON,
 	})
-	if err != nil {
-		return nil, fmt.Errorf("drift: marshal backbone request: %w", err)
-	}
-
-	reqPtr, reqLen := bytesToPtr(reqBytes)
-	respLen := hostBackboneRequest(reqPtr, reqLen)
-	if respLen == 0 {
+	if len(resp) == 0 {
 		return nil, nil
 	}
-	return readHostResponse(respLen), nil
+	return resp, nil
 }
 
 // --- NoSQL ---
@@ -43,7 +86,6 @@ func BackboneWrite(collection string, doc any) (string, error) {
 	payload := map[string]any{
 		"collection": collection,
 	}
-	// Merge doc fields into payload if it's a map.
 	if m, ok := doc.(map[string]any); ok {
 		maps.Copy(payload, m)
 	} else {
@@ -55,7 +97,6 @@ func BackboneWrite(collection string, doc any) (string, error) {
 		return "", err
 	}
 
-	// Backbone may return JSON with a key field or plain text on success.
 	var result struct {
 		Key string `json:"key"`
 	}
@@ -73,7 +114,6 @@ func BackboneRead(collection, key string) (json.RawMessage, error) {
 }
 
 // BackboneList returns all documents in a Backbone NoSQL collection.
-// Optionally filter by a single field=value match.
 func BackboneList(collection string, filter map[string]string) ([]json.RawMessage, error) {
 	path := fmt.Sprintf("nosql/list?collection=%s", collection)
 	for k, v := range filter {
@@ -209,7 +249,6 @@ func VectorSearch(collection string, vector []float32, k int) ([]json.RawMessage
 // --- Lock ---
 
 // LockAcquire acquires a distributed lock in Backbone.
-// Returns a token that must be passed to LockRelease.
 func LockAcquire(name string, ttlSeconds int) (string, error) {
 	resp, err := callBackbone("POST", "lock/acquire", map[string]any{
 		"name": name,

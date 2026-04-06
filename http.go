@@ -3,6 +3,9 @@ package drift
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"strings"
 )
 
 // HTTPResponse is the response from an outbound HTTP request.
@@ -12,41 +15,41 @@ type HTTPResponse struct {
 	Body    []byte            `json:"body"`
 }
 
-// HTTPRequest makes an outbound HTTP request through the WASM runner host.
-// This is the only way for WASM functions to reach external services.
+// HTTPRequest makes an outbound HTTP request directly.
 func HTTPRequest(method, url string, headers map[string]string, body []byte) (*HTTPResponse, error) {
-	var bodyJSON json.RawMessage
+	var bodyReader io.Reader
 	if body != nil {
-		bodyJSON = body
+		bodyReader = strings.NewReader(string(body))
 	}
 
-	reqBytes, err := json.Marshal(httpRequest{
-		Method:  method,
-		URL:     url,
-		Headers: headers,
-		Body:    bodyJSON,
-	})
+	req, err := http.NewRequest(method, url, bodyReader)
 	if err != nil {
-		return nil, fmt.Errorf("drift: marshal http request: %w", err)
+		return nil, fmt.Errorf("drift: create request: %w", err)
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
 	}
 
-	reqPtr, reqLen := bytesToPtr(reqBytes)
-	respLen := hostHTTPRequest(reqPtr, reqLen)
-	if respLen == 0 {
-		return nil, fmt.Errorf("drift: empty http response")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("drift: http request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("drift: read response: %w", err)
 	}
 
-	respBytes := readHostResponse(respLen)
-
-	var resp httpResponse
-	if err := json.Unmarshal(respBytes, &resp); err != nil {
-		return nil, fmt.Errorf("drift: parse http response: %w", err)
+	respHeaders := make(map[string]string, len(resp.Header))
+	for k := range resp.Header {
+		respHeaders[k] = resp.Header.Get(k)
 	}
 
 	return &HTTPResponse{
-		Status:  resp.Status,
-		Headers: resp.Headers,
-		Body:    resp.Body,
+		Status:  resp.StatusCode,
+		Headers: respHeaders,
+		Body:    respBody,
 	}, nil
 }
 

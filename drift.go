@@ -10,24 +10,24 @@ import (
 // Run is the entry point for Drift Atomic functions. The handler receives
 // the incoming HTTP request and must return a response.
 //
-// In WASM mode (DRIFT_WASM_RUNTIME is set): reads a JSON request from stdin,
-// calls the handler, and writes the JSON response to stdout. The WASM runner
-// manages the HTTP server, proxy registration, and log shipping.
+// In deployed mode (DRIFT_RUNTIME is set): reads a JSON request from stdin,
+// calls the handler, and writes the JSON response to stdout. The runner
+// manages the HTTP routing, log capture, and metrics.
 //
-// In local dev mode (no DRIFT_WASM_RUNTIME): starts a local HTTP server on
+// In local dev mode (no DRIFT_RUNTIME): starts a local HTTP server on
 // the port specified by the PORT env var (default 8080) so developers can
-// test their functions with `drift atomic run` without needing wazero.
+// test their functions with `drift atomic run`.
 func Run(handler func(Request) Response) {
-	if os.Getenv("DRIFT_WASM_RUNTIME") != "" {
-		runWASM(handler)
+	if os.Getenv("DRIFT_RUNTIME") != "" {
+		runDeployed(handler)
 	} else {
 		runLocal(handler)
 	}
 }
 
-// runWASM implements the WASM-mode protocol: read request from stdin, call
-// handler, write response to stdout.
-func runWASM(handler func(Request) Response) {
+// runDeployed implements the deployed-mode protocol: read request from stdin,
+// call handler, write response to stdout.
+func runDeployed(handler func(Request) Response) {
 	var req Request
 	if err := json.NewDecoder(os.Stdin).Decode(&req); err != nil {
 		resp := Response{
