@@ -142,7 +142,6 @@ type BackboneRequest struct {
 	Body   json.RawMessage `json:"body,omitempty"`
 }
 
-// TODO: use the actual functions implemented below...
 func (m *memBackbone) handle(req BackboneRequest) []byte {
 	m.mu.Lock()
 	defer m.mu.Unlock()
