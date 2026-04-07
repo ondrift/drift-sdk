@@ -112,15 +112,16 @@ func runLocal(handler func(Request) Response) {
 	}
 }
 
-// Local Backbone implementation
-// that allows the user to interact with an in-memory data store
-// and be assured that it will work like their own instance.
+//       Local backbone section          //
 
-// backboneRequest is the internal envelope for backbone calls (local dev only).
-type BackboneRequest struct {
-	Method string          `json:"method"`
-	Path   string          `json:"path"`
-	Body   json.RawMessage `json:"body,omitempty"`
+type memBackbone struct {
+	mu     sync.Mutex
+	nosql  map[string]map[string]json.RawMessage
+	cache  map[string]json.RawMessage
+	queues map[string][]json.RawMessage
+	blobs  map[string][]byte
+	locks  map[string]string
+	nextID int
 }
 
 // localBackbone is an in-memory implementation of backbone services for local
@@ -134,16 +135,14 @@ var localBackbone = &memBackbone{
 	locks:  make(map[string]string),
 }
 
-type memBackbone struct {
-	mu     sync.Mutex
-	nosql  map[string]map[string]json.RawMessage
-	cache  map[string]json.RawMessage
-	queues map[string][]json.RawMessage
-	blobs  map[string][]byte
-	locks  map[string]string
-	nextID int
+// backboneRequest is the internal envelope for backbone calls (local dev only).
+type BackboneRequest struct {
+	Method string          `json:"method"`
+	Path   string          `json:"path"`
+	Body   json.RawMessage `json:"body,omitempty"`
 }
 
+// TODO: use the actual functions implemented below...
 func (m *memBackbone) handle(req BackboneRequest) []byte {
 	m.mu.Lock()
 	defer m.mu.Unlock()

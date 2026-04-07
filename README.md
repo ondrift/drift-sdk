@@ -1,6 +1,6 @@
 # drift-sdk
 
-Go SDK for writing Drift atomic functions. Provides the `drift.Run()` entry point and host call wrappers for backbone services.
+Go SDK for writing Drift atomic functions. Provides the `drift.Run()` entry point and host call wrappers for backbone services. Based purely on stdlib: zero dependencies.
 
 ## Usage
 
