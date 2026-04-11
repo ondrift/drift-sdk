@@ -659,3 +659,45 @@ func VectorInsert(collection, id string, vector []float32, metadata any) error {
 func VectorSearch(collection string, vector []float32, k int) ([]json.RawMessage, error) {
 	return Vector.Collection(collection).Search(vector, k)
 }
+
+// ─── Logging ─────────────────────────────────────────────────────────────────
+
+// Log writes a message to stderr, which the runner captures as function logs.
+func Log(msg string) {
+	fmt.Fprintln(os.Stderr, msg)
+}
+
+// ─── HTTP client ─────────────────────────────────────────────────────────────
+
+// HTTPResponse holds the status code and body returned by HTTPRequest.
+type HTTPResponse struct {
+	Status int
+	Body   []byte
+}
+
+// HTTPRequest makes an outbound HTTP request from within an Atomic function.
+// Headers are optional (pass nil to skip). Body is optional (pass nil for
+// bodyless methods like GET).
+func HTTPRequest(method, rawURL string, headers map[string]string, body []byte) (*HTTPResponse, error) {
+	var reader io.Reader
+	if body != nil {
+		reader = bytes.NewReader(body)
+	}
+	req, err := http.NewRequest(method, rawURL, reader)
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	return &HTTPResponse{Status: resp.StatusCode, Body: respBody}, nil
+}
