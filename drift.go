@@ -386,77 +386,50 @@ func callBackboneLocal(method, path string, body any) ([]byte, error) {
 	return resp, nil
 }
 
-// --- NoSQL ---
+// ================================================================
+// Namespace API — dot-separated access (drift.Secret.Get, etc.)
+// ================================================================
 
-// BackboneWrite writes a document to a Backbone NoSQL collection.
-// Returns the assigned key on success.
-func BackboneWrite(collection string, doc any) (string, error) {
-	payload := map[string]any{
-		"collection": collection,
-	}
-	if m, ok := doc.(map[string]any); ok {
-		maps.Copy(payload, m)
-	} else {
-		payload["data"] = doc
-	}
+// --- Secret ---
 
-	resp, err := callBackbone("POST", "write", payload)
+type secretNS struct{}
+
+// Secret provides access to Backbone secrets.
+var Secret secretNS
+
+func (secretNS) Get(name string) (string, error) {
+	resp, err := callBackbone("GET", fmt.Sprintf("secret/get?name=%s", name), nil)
 	if err != nil {
 		return "", err
 	}
-
-	var result struct {
-		Key string `json:"key"`
-	}
-	_ = json.Unmarshal(resp, &result)
-	return result.Key, nil
+	return string(resp), nil
 }
 
-// BackboneRead reads a document from a Backbone NoSQL collection by key.
-func BackboneRead(collection, key string) (json.RawMessage, error) {
-	resp, err := callBackbone("GET", fmt.Sprintf("read?collection=%s&key=%s", collection, key), nil)
-	if err != nil {
-		return nil, err
-	}
-	return resp, nil
+func (secretNS) Set(name, value string) error {
+	_, err := callBackbone("POST", "secret/set", map[string]any{
+		"name":  name,
+		"value": value,
+	})
+	return err
 }
 
-// BackboneList returns all documents in a Backbone NoSQL collection.
-func BackboneList(collection string, filter map[string]string) ([]json.RawMessage, error) {
-	path := fmt.Sprintf("nosql/list?collection=%s", collection)
-	for k, v := range filter {
-		path += fmt.Sprintf("&field=%s&value=%s", k, v)
-	}
-	resp, err := callBackbone("GET", path, nil)
-	if err != nil {
-		return nil, err
-	}
-	if resp == nil {
-		return []json.RawMessage{}, nil
-	}
-
-	var results []json.RawMessage
-	if err := json.Unmarshal(resp, &results); err != nil {
-		return nil, fmt.Errorf("drift: parse list response: %w", err)
-	}
-	return results, nil
-}
-
-// BackboneDrop drops an entire Backbone NoSQL collection.
-func BackboneDrop(collection string) error {
-	_, err := callBackbone("POST", fmt.Sprintf("nosql/drop?collection=%s", collection), nil)
+func (secretNS) Delete(name string) error {
+	_, err := callBackbone("DELETE", fmt.Sprintf("secret/delete?name=%s", name), nil)
 	return err
 }
 
 // --- Cache ---
 
-// CacheGet retrieves a value from the Backbone cache.
-func CacheGet(key string) ([]byte, error) {
+type cacheNS struct{}
+
+// Cache provides access to the Backbone key-value cache.
+var Cache cacheNS
+
+func (cacheNS) Get(key string) ([]byte, error) {
 	return callBackbone("GET", fmt.Sprintf("cache/get?key=%s", key), nil)
 }
 
-// CacheSet stores a value in the Backbone cache with an optional TTL.
-func CacheSet(key string, value any, ttlSeconds int) error {
+func (cacheNS) Set(key string, value any, ttlSeconds int) error {
 	payload := map[string]any{
 		"key":   key,
 		"value": value,
@@ -468,38 +441,103 @@ func CacheSet(key string, value any, ttlSeconds int) error {
 	return err
 }
 
-// CacheDel removes a key from the Backbone cache.
-func CacheDel(key string) error {
+func (cacheNS) Del(key string) error {
 	_, err := callBackbone("DELETE", fmt.Sprintf("cache/del?key=%s", key), nil)
+	return err
+}
+
+// --- NoSQL ---
+
+type nosqlNS struct{}
+
+// NoSQL provides access to Backbone NoSQL document collections.
+var NoSQL nosqlNS
+
+type collectionHandle struct{ name string }
+
+func (nosqlNS) Collection(name string) collectionHandle {
+	return collectionHandle{name: name}
+}
+
+func (c collectionHandle) Insert(doc any) (string, error) {
+	payload := map[string]any{
+		"collection": c.name,
+	}
+	if m, ok := doc.(map[string]any); ok {
+		maps.Copy(payload, m)
+	} else {
+		payload["data"] = doc
+	}
+	resp, err := callBackbone("POST", "write", payload)
+	if err != nil {
+		return "", err
+	}
+	var result struct {
+		Key string `json:"key"`
+	}
+	_ = json.Unmarshal(resp, &result)
+	return result.Key, nil
+}
+
+func (c collectionHandle) Read(key string) (json.RawMessage, error) {
+	return callBackbone("GET", fmt.Sprintf("read?collection=%s&key=%s", c.name, key), nil)
+}
+
+func (c collectionHandle) List(filter map[string]string) ([]json.RawMessage, error) {
+	path := fmt.Sprintf("nosql/list?collection=%s", c.name)
+	for k, v := range filter {
+		path += fmt.Sprintf("&field=%s&value=%s", k, v)
+	}
+	resp, err := callBackbone("GET", path, nil)
+	if err != nil {
+		return nil, err
+	}
+	if resp == nil {
+		return []json.RawMessage{}, nil
+	}
+	var results []json.RawMessage
+	if err := json.Unmarshal(resp, &results); err != nil {
+		return nil, fmt.Errorf("drift: parse list response: %w", err)
+	}
+	return results, nil
+}
+
+func (c collectionHandle) Drop() error {
+	_, err := callBackbone("POST", fmt.Sprintf("nosql/drop?collection=%s", c.name), nil)
 	return err
 }
 
 // --- Queue ---
 
-// QueuePush pushes a message onto a Backbone queue.
-func QueuePush(queue string, body any) error {
+type queueHandle struct{ name string }
+
+// Queue returns a handle to a Backbone message queue.
+func Queue(name string) queueHandle {
+	return queueHandle{name: name}
+}
+
+func (q queueHandle) Push(body any) error {
 	_, err := callBackbone("POST", "queue/push", map[string]any{
-		"queue": queue,
+		"queue": q.name,
 		"body":  body,
 	})
 	return err
 }
 
-// QueuePop pops a message from a Backbone queue.
-func QueuePop(queue string) (json.RawMessage, error) {
-	resp, err := callBackbone("POST", "queue/pop", map[string]any{
-		"queue": queue,
+func (q queueHandle) Pop() (json.RawMessage, error) {
+	return callBackbone("POST", "queue/pop", map[string]any{
+		"queue": q.name,
 	})
-	if err != nil {
-		return nil, err
-	}
-	return resp, nil
 }
 
 // --- Blob ---
 
-// BlobPut uploads a blob to Backbone.
-func BlobPut(name string, data []byte) error {
+type blobNS struct{}
+
+// Blob provides access to Backbone binary object storage.
+var Blob blobNS
+
+func (blobNS) Put(name string, data []byte) error {
 	_, err := callBackbone("POST", "blob/put", map[string]any{
 		"name": name,
 		"data": data,
@@ -507,57 +545,18 @@ func BlobPut(name string, data []byte) error {
 	return err
 }
 
-// BlobGet downloads a blob from Backbone.
-func BlobGet(name string) ([]byte, error) {
+func (blobNS) Get(name string) ([]byte, error) {
 	return callBackbone("GET", fmt.Sprintf("blob/get?name=%s", name), nil)
-}
-
-// --- Secret ---
-
-// SecretGet retrieves a secret value from Backbone.
-func SecretGet(name string) (string, error) {
-	resp, err := callBackbone("GET", fmt.Sprintf("secret/get?name=%s", name), nil)
-	if err != nil {
-		return "", err
-	}
-	return string(resp), nil
-}
-
-// --- Vector ---
-
-// VectorInsert inserts a vector into a Backbone vector collection.
-func VectorInsert(collection, id string, vector []float32, metadata any) error {
-	_, err := callBackbone("POST", "vector/insert", map[string]any{
-		"collection": collection,
-		"id":         id,
-		"vector":     vector,
-		"metadata":   metadata,
-	})
-	return err
-}
-
-// VectorSearch performs a k-nearest-neighbor search on a Backbone vector collection.
-func VectorSearch(collection string, vector []float32, k int) ([]json.RawMessage, error) {
-	resp, err := callBackbone("POST", "vector/search", map[string]any{
-		"collection": collection,
-		"vector":     vector,
-		"k":          k,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	var results []json.RawMessage
-	if err := json.Unmarshal(resp, &results); err != nil {
-		return nil, fmt.Errorf("drift: parse vector search response: %w", err)
-	}
-	return results, nil
 }
 
 // --- Lock ---
 
-// LockAcquire acquires a distributed lock in Backbone.
-func LockAcquire(name string, ttlSeconds int) (string, error) {
+type lockNS struct{}
+
+// Lock provides access to Backbone distributed locks.
+var Lock lockNS
+
+func (lockNS) Acquire(name string, ttlSeconds int) (string, error) {
 	resp, err := callBackbone("POST", "lock/acquire", map[string]any{
 		"name": name,
 		"ttl":  ttlSeconds,
@@ -565,7 +564,6 @@ func LockAcquire(name string, ttlSeconds int) (string, error) {
 	if err != nil {
 		return "", err
 	}
-
 	var result struct {
 		Token string `json:"token"`
 	}
@@ -575,11 +573,89 @@ func LockAcquire(name string, ttlSeconds int) (string, error) {
 	return result.Token, nil
 }
 
-// LockRelease releases a previously acquired distributed lock.
-func LockRelease(name, token string) error {
+func (lockNS) Release(name, token string) error {
 	_, err := callBackbone("POST", "lock/release", map[string]any{
 		"name":  name,
 		"token": token,
 	})
 	return err
+}
+
+// --- Vector ---
+
+type vectorNS struct{}
+
+// Vector provides access to Backbone vector indexes.
+var Vector vectorNS
+
+type vectorCollectionHandle struct{ name string }
+
+func (vectorNS) Collection(name string) vectorCollectionHandle {
+	return vectorCollectionHandle{name: name}
+}
+
+func (vc vectorCollectionHandle) Insert(id string, vector []float32, metadata any) error {
+	_, err := callBackbone("POST", "vector/insert", map[string]any{
+		"collection": vc.name,
+		"id":         id,
+		"vector":     vector,
+		"metadata":   metadata,
+	})
+	return err
+}
+
+func (vc vectorCollectionHandle) Search(vector []float32, k int) ([]json.RawMessage, error) {
+	resp, err := callBackbone("POST", "vector/search", map[string]any{
+		"collection": vc.name,
+		"vector":     vector,
+		"k":          k,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var results []json.RawMessage
+	if err := json.Unmarshal(resp, &results); err != nil {
+		return nil, fmt.Errorf("drift: parse vector search response: %w", err)
+	}
+	return results, nil
+}
+
+// ================================================================
+// Deprecated flat API — kept for backward compatibility.
+// Prefer the namespace API above (drift.Secret.Get, drift.NoSQL.Collection, etc.)
+// ================================================================
+
+func BackboneWrite(collection string, doc any) (string, error) {
+	return NoSQL.Collection(collection).Insert(doc)
+}
+
+func BackboneRead(collection, key string) (json.RawMessage, error) {
+	return NoSQL.Collection(collection).Read(key)
+}
+
+func BackboneList(collection string, filter map[string]string) ([]json.RawMessage, error) {
+	return NoSQL.Collection(collection).List(filter)
+}
+
+func BackboneDrop(collection string) error {
+	return NoSQL.Collection(collection).Drop()
+}
+
+func CacheGet(key string) ([]byte, error)                        { return Cache.Get(key) }
+func CacheSet(key string, value any, ttlSeconds int) error       { return Cache.Set(key, value, ttlSeconds) }
+func CacheDel(key string) error                                  { return Cache.Del(key) }
+func QueuePush(queue string, body any) error                     { return Queue(queue).Push(body) }
+func QueuePop(queue string) (json.RawMessage, error)             { return Queue(queue).Pop() }
+func BlobPut(name string, data []byte) error                     { return Blob.Put(name, data) }
+func BlobGet(name string) ([]byte, error)                        { return Blob.Get(name) }
+func SecretGet(name string) (string, error)                      { return Secret.Get(name) }
+func LockAcquire(name string, ttlSeconds int) (string, error)   { return Lock.Acquire(name, ttlSeconds) }
+func LockRelease(name, token string) error                       { return Lock.Release(name, token) }
+
+func VectorInsert(collection, id string, vector []float32, metadata any) error {
+	return Vector.Collection(collection).Insert(id, vector, metadata)
+}
+
+func VectorSearch(collection string, vector []float32, k int) ([]json.RawMessage, error) {
+	return Vector.Collection(collection).Search(vector, k)
 }
