@@ -22,14 +22,16 @@ type Request struct {
 	Headers map[string]string `json:"headers"`
 	Query   string            `json:"query"`
 	Body    json.RawMessage   `json:"body"`
+	Params  map[string]string `json:"params,omitempty"` // path parameters (e.g., ":id" → "123")
 }
 
 // Response is what the function handler returns. The runner reads
 // this from the subprocess's stdout and converts it back into an HTTP response.
 type Response struct {
-	Status  int             `json:"status"`
-	Message string          `json:"message"`
-	Payload json.RawMessage `json:"payload"`
+	Status  int               `json:"status"`
+	Message string            `json:"message"`
+	Payload json.RawMessage   `json:"payload"`
+	Headers map[string]string `json:"headers,omitempty"` // custom response headers
 }
 
 // Run is the entry point for Drift Atomic functions. The handler receives
@@ -97,6 +99,9 @@ func runLocal(handler func(Request) Response) {
 		resp := handler(req)
 
 		w.Header().Set("Content-Type", "application/json")
+		for k, v := range resp.Headers {
+			w.Header().Set(k, v)
+		}
 		w.WriteHeader(resp.Status)
 		json.NewEncoder(w).Encode(map[string]any{
 			"status":  resp.Status,
