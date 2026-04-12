@@ -115,7 +115,11 @@ async function _call(method, path, body) {
   if (resp.status === 204) return null;
   const text = await resp.text();
   if (!text) return null;
-  return JSON.parse(text);
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
 }
 
 // In-memory backbone for local dev.

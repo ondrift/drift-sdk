@@ -133,7 +133,10 @@ def _call(method, path, body=None):
             raw = resp.read()
             if not raw:
                 return None
-            return json.loads(raw)
+            try:
+                return json.loads(raw)
+            except (json.JSONDecodeError, ValueError):
+                return raw.decode("utf-8", errors="replace")
     except urllib.error.HTTPError as e:
         if e.code == 204:
             return None
@@ -310,7 +313,9 @@ class _CollectionHandle:
         else:
             payload["data"] = doc
         resp = _call("POST", "write", payload)
-        return (resp or {}).get("key", "")
+        if isinstance(resp, dict):
+            return resp.get("key", "")
+        return ""
 
     def read(self, key):
         return _call("GET", f"read?collection={urllib.parse.quote(self.name)}&key={urllib.parse.quote(key)}")

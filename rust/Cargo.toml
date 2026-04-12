@@ -1,0 +1,9 @@
+[package]
+name = "drift-sdk"
+version = "0.1.0"
+edition = "2021"
+description = "Drift SDK for Rust Atomic functions"
+
+[dependencies]
+serde_json = "1"
+ureq = "2"
